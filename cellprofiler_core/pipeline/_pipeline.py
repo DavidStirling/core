@@ -61,6 +61,7 @@ from ..constants.pipeline import DIRECTION_UP
 from ..constants.pipeline import EXIT_STATUS
 from ..constants.pipeline import GROUP_INDEX
 from ..constants.pipeline import GROUP_NUMBER
+from ..constants.pipeline import GROUP_LENGTH
 from ..constants.pipeline import H_DATE_REVISION
 from ..constants.pipeline import H_GIT_HASH
 from ..constants.pipeline import H_HAS_IMAGE_PLANE_DETAILS
@@ -77,10 +78,11 @@ from ..constants.pipeline import SAD_PROOFPOINT_COOKIE
 from ..constants.workspace import DISPOSITION_CANCEL
 from ..constants.workspace import DISPOSITION_PAUSE
 from ..constants.workspace import DISPOSITION_SKIP
+from ..constants.modules.metadata import X_AUTOMATIC_EXTRACTION
 from ..image import ImageSetList
 from ..measurement import Measurements
 from ..object import ObjectSet
-from ..preferences import get_headless
+from ..preferences import get_always_continue, get_headless
 from ..preferences import get_conserve_memory
 from ..preferences import report_progress
 from ..setting import Measurement
@@ -140,6 +142,8 @@ class Pipeline:
         self.__image_plane_details = []
         self.__image_plane_details_metadata_settings = tuple()
 
+        self.__needs_headless_extraction = False
+        
         self.__undo_stack = []
         self.__volumetric = False
 
@@ -148,6 +152,12 @@ class Pipeline:
 
     def volumetric(self):
         return self.__volumetric
+    
+    def set_needs_headless_extraction(self, value):
+        self.__needs_headless_extraction = value
+
+    def needs_headless_extraction(self):
+        return self.__needs_headless_extraction
 
     def copy(self, save_image_plane_details=True):
         """Create a copy of the pipeline modules and settings"""
@@ -278,9 +288,22 @@ class Pipeline:
             fd = urllib.request.urlopen(fd_or_filename)
             return self.load(fd)
 
+        if hasattr(fd, 'name') and fd.name.endswith('.json'):
+            # Load a JSON format pipeline
+            from cellprofiler_core.pipeline.io._v6 import load
+            load(self, fd)
+            # Perform proper pipeline setup after loading.
+            self.__settings = [
+                self.capture_module_settings(module) for module in
+                self.modules(False)
+            ]
+            for module in self.modules(False):
+                module.post_pipeline_load(self)
+            self.notify_listeners(PipelineLoaded())
+            self.__undo_stack = []
+            return
         if Pipeline.is_pipeline_txt_fd(fd):
             self.loadtxt(fd)
-
             return
 
         if needs_close:
@@ -557,7 +580,15 @@ class Pipeline:
             raise ValueError("Invalid format for attributes: %s" % attribute_string)
         # Fix for array dtypes which contain split separator
         attribute_string = attribute_string.replace("dtype='|S", "dtype='S")
-        attribute_strings = attribute_string[1:-1].split("|")
+        if len(re.split("(?P<note>\|notes:\[.*?\]\|)",attribute_string)) ==3:
+            # 4674- sometimes notes have pipes
+            prenote,note,postnote = re.split("(?P<note>\|notes:\[.*?\]\|)",attribute_string)
+            attribute_strings = prenote[1:].split("|")
+            attribute_strings += [note[1:-1]]
+            attribute_strings += postnote[:-1].split("|") 
+        else:
+            #old or weird pipeline without notes
+            attribute_strings = attribute_string[1:-1].split("|")
         variable_revision_number = None
         # make batch_state decodable from text pipelines
         # NOTE, MAGIC HERE: These variables are **necessary**, even though they
@@ -824,6 +855,15 @@ class Pipeline:
         workspace = Workspace(
             self, None, None, None, measurements, image_set_list, frame
         )
+        
+        if len(self.__modules)>1:
+            from cellprofiler_core.modules.metadata import Metadata
+            if type(self.__modules[1]) == Metadata:
+                if self.__modules[1].wants_metadata.value:
+                    for extraction_group in self.__modules[1].extraction_methods:
+                        if extraction_group.extraction_method.value == X_AUTOMATIC_EXTRACTION:
+                            self.set_needs_headless_extraction(True)
+                            break
 
         try:
             if not self.prepare_run(workspace):
@@ -975,6 +1015,7 @@ class Pipeline:
                     try:
                         self.run_module(module, workspace)
                     except Exception as instance:
+                        print("pipeline_exception")
                         logging.error(
                             "Error detected during run of module %s",
                             module.module_name,
@@ -1029,19 +1070,25 @@ class Pipeline:
                     failure = 0
 
                     if exception is not None:
-                        event = RunException(exception, module, tb)
-
-                        self.notify_listeners(event)
-
-                        if event.cancel_run:
-                            return
-                        elif event.skip_thisset:
-                            # Skip this image, continue to others
+                        if get_always_continue():
                             workspace.set_disposition(DISPOSITION_SKIP)
 
                             should_write_measurements = False
 
-                            measurements = None
+                        else:
+                            event = RunException(exception, module, tb)
+
+                            self.notify_listeners(event)
+
+                            if event.cancel_run:
+                                return
+                            elif event.skip_thisset:
+                                # Skip this image, continue to others
+                                workspace.set_disposition(DISPOSITION_SKIP)
+
+                                should_write_measurements = False
+
+                                measurements = None
 
                     # Paradox: ExportToDatabase must write these columns in order
                     #  to complete, but in order to do so, the module needs to
@@ -1166,6 +1213,7 @@ class Pipeline:
                 # the UI has cancelled the run. Forward exception upward.
                 raise
             except Exception as exception:
+                print("run_image_set_exception, get_always_continue",get_always_continue())
                 logging.error(
                     "Error detected during run of module %s#%d",
                     module.module_name,
@@ -1177,6 +1225,8 @@ class Pipeline:
                         "Image",
                         "ModuleError_%02d%s" % (module.module_num, module.module_name),
                     ] = 1
+                if get_always_continue():
+                    return
                 evt = RunException(exception, module, sys.exc_info()[2])
                 self.notify_listeners(evt)
                 if evt.cancel_run or evt.skip_thisset:
@@ -1364,6 +1414,14 @@ class Pipeline:
                     break
                 try:
                     workspace.set_module(module)
+                    if self.needs_headless_extraction():
+                        from cellprofiler_core.modules.metadata import Metadata
+                        if isinstance(module, Metadata):
+                            workspace.file_list.add_files_to_filelist(self.file_list)
+                            module.on_activated(workspace)
+                            for extraction_group in module.extraction_methods:
+                                if extraction_group.extraction_method.value == X_AUTOMATIC_EXTRACTION:
+                                    module.do_update_metadata(extraction_group)
                     workspace.show_frame(module.show_window)
                     if (
                         not module.prepare_run(workspace)
@@ -1401,15 +1459,20 @@ class Pipeline:
             indexes[image_numbers] = numpy.arange(len(image_numbers))
             group_numbers = numpy.zeros(len(image_numbers), int)
             group_indexes = numpy.zeros(len(image_numbers), int)
+            group_lengths = numpy.ones(len(image_numbers), int)
             for i, (key, group_image_numbers) in enumerate(groupings):
                 iii = indexes[group_image_numbers]
                 group_numbers[iii] = i + 1
                 group_indexes[iii] = numpy.arange(len(iii)) + 1
+                group_lengths[iii] = numpy.ones(len(iii), int) * len(iii)
             m.add_all_measurements(
                 "Image", GROUP_NUMBER, group_numbers,
             )
             m.add_all_measurements(
                 "Image", GROUP_INDEX, group_indexes,
+            )
+            m.add_all_measurements(
+                "Image", GROUP_LENGTH, group_lengths,
             )
             #
             # The grouping for legacy pipelines may not be monotonically
@@ -2350,6 +2413,7 @@ class Pipeline:
             ),
             ("Image", GROUP_NUMBER, COLTYPE_INTEGER,),
             ("Image", GROUP_INDEX, COLTYPE_INTEGER,),
+            ("Image", GROUP_LENGTH, COLTYPE_INTEGER,),
         ]
         should_write_columns = True
         for module in self.modules():
