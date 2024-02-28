@@ -25,7 +25,7 @@ setuptools.setup(
         "centrosome==1.2.2",
         "docutils==0.15.2",
         "fsspec==2022.2.0",
-        "h5py==3.6.0",
+        "h5py==3.6.0",  # Consider 3.2.1 if problems happen
         "matplotlib==3.1.3",
         "numpy==1.23.1",
         "prokaryote==2.4.4",
@@ -33,7 +33,7 @@ setuptools.setup(
         "python-bioformats==4.0.7",
         "python-javabridge==4.0.3",
         "pyzmq==22.3.0",
-        "Pillow==8.1.0",
+        "Pillow==8.3.2",
         "scikit-image==0.18.3",
         "scipy==1.9.0",
         "zarr==2.10.2",
