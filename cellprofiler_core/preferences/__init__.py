@@ -1239,10 +1239,8 @@ def update_cpfigure_position():
 
 
 def get_telemetry():
-    if not config_exists(TELEMETRY):
-        return True
-
-    return get_config().ReadBool(TELEMETRY)
+    # We don't send bug reports since we've edited the code
+    return False
 
 
 def set_telemetry(val):
