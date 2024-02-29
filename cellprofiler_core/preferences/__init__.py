@@ -1251,10 +1251,7 @@ def set_telemetry(val):
 
 
 def get_telemetry_prompt():
-    if not config_exists(TELEMETRY_PROMPT):
-        return True
-
-    return get_config().ReadBool(TELEMETRY_PROMPT)
+    return False
 
 
 def set_telemetry_prompt(val):
