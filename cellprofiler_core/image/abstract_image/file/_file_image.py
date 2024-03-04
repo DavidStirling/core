@@ -301,7 +301,7 @@ class FileImage(AbstractImage):
                     c=self.channel,
                     series=self.series,
                     index=self.index,
-                    rescale=self.rescale,
+                    rescale=self.rescale if isinstance(self.rescale, bool) else False,
                     wants_max_intensity=True,
                     channel_names=channel_names,
                     z=self.z_index,
@@ -325,7 +325,7 @@ class FileImage(AbstractImage):
                         c=channel,
                         series=series,
                         index=index,
-                        rescale=self.rescale,
+                        rescale=self.rescale if isinstance(self.rescale, bool) else False,
                         wants_max_intensity=True,
                         channel_names=channel_names,
                         z=self.z_index,
@@ -341,6 +341,7 @@ class FileImage(AbstractImage):
             path_name=self.get_pathname(),
             file_name=self.get_filename(),
             scale=self.scale,
+            channelstack=img.ndim == 3 and img.shape[-1]>3
         )
         if img.ndim == 3 and len(channel_names) == img.shape[2]:
             self.__image.channel_names = list(channel_names)
