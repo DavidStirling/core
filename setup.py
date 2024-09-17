@@ -12,7 +12,7 @@ setuptools.setup(
     ],
     extras_require={
         "dev": [
-            "sphinx==3.1.2",
+            "sphinx>=3.1.2",
             "twine==3.1.1",
         ],
         "test": ["pytest~=7.4.1"],
