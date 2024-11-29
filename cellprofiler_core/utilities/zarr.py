@@ -208,14 +208,14 @@ class ZarrReader(object):
             # Empty well data for some reason
             return False
         mapper = {}
-        if 'column_index' in well_data[0]:
-            # v0.2 format
-            for row in well_data:
-                mapper[(str(row['column_index']), str(row['row_index']))] = row['path']
-        elif "columnIndex" in well_data[0]:
-            # v0.4 format
+        if "columnIndex" in well_data[0]:
+            # NGFF v0.4 format
             for row in well_data:
                 mapper[(str(row['columnIndex']), str(row['rowIndex']))] = row['path']
+        elif 'column_index' in well_data[0]:
+            # Older bioformats2raw format
+            for row in well_data:
+                mapper[(str(row['column_index']), str(row['row_index']))] = row['path']
         else:
             for row in well_data:
                 path = row['path']
